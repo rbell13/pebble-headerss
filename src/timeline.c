@@ -1933,40 +1933,64 @@ static void timeline_click_config_provider(void *ctx) {
 // ---------------------------------------------------------------------------
 // Touch gestures (reader). The reader is a custom paged view — the system
 // touch bridge (menus) does nothing for it, so the window disables the
-// bridge and drives its own recognizers + raw touch stream:
-//   skim view:    swipe up/down = previous/next article (mirrors the buttons)
+// bridge and consumes the raw touch stream directly (no recognizers: the
+// SDK's tap/swipe recognizers proved unreliable and directionally inverted
+// on the target firmware, while the raw stream worked):
+//   skim view:    swipe up = next article, swipe down = previous
+//                 (natural: up = later, same direction as the scroll drag)
 //                 tap = read/unread, tap hold (500 ms) = favourite,
 //                 double tap = enter article scroll
-//   scroll mode:  drag scrolls the article (finger-down = page-down, the
-//                 same button-mirrored direction as the swipes), swipe
-//                 page-steps, swipe down at the bottom advances to the next
-//                 article, swipe up at the top exits scroll mode, double
+//   scroll mode:  the content follows the finger (drag up = article scrolls
+//                 down = later text), a fast flick page-steps in the flick
+//                 direction, a flick up at the bottom advances to the next
+//                 article, a flick down at the top exits scroll mode, double
 //                 tap exits. Tap/hold keep their skim-mode actions.
+//   left edge:    a swipe from the left screen border to the inside goes
+//                 back (window_stack_pop), exactly like touch in the menus.
 // The single-tap action is deferred by the double-tap window; a second tap
 // inside the window turns it into the double-tap action instead. The hold is
-// detected on the raw stream (a 500 ms still press), because the recognizer
-// set has no long-press gesture; a fired hold suppresses the tap that would
-// otherwise fire on liftoff.
-// Platform scope: the recognizer + touch-service APIs are real on emery/
-// gabbro (SDK 4.33) and compile-time no-ops on the 64 KB class — the whole
-// section is compiled out there (the stubbed headers even break struct
-// initializers like `GPoint d = pan_recognizer_get_delta_since_start(...)`).
+// a 500 ms still press on the raw stream; a fired hold suppresses the tap
+// that would otherwise fire on liftoff.
+// Platform scope: the touch-service API is real on emery/gabbro (SDK 4.33)
+// and a compile-time no-op on the 64 KB class — the whole section is
+// compiled out there.
+// Debugging: set TOUCH_DEBUG to 1 for a debug build that logs every raw
+// event (type, x, y, ms) and every classified gesture — capture with
+// `pebble logs` on the phone to trace the firmware's real touch behavior.
 // ---------------------------------------------------------------------------
 
 #if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
 
+#define TOUCH_DEBUG 0 // 1 = verbose raw-event + gesture logging (debug build)
+
 #define TOUCH_TAP_DEBOUNCE_MS 350  // double-tap window = deferred single tap
 #define TOUCH_HOLD_MS 500          // hold threshold (matches the buttons)
-#define TOUCH_HOLD_CANCEL_DIST 12  // px of finger travel that voids a hold
+#define TOUCH_MOVE_DIST 12         // px of travel that voids a hold / starts a drag
+#define TOUCH_SWIPE_MIN 18         // min travel for a skim-mode navigation swipe
+#define TOUCH_FLICK_MIN 15         // min travel for a scroll-mode flick
+#define TOUCH_FLICK_VEL 300        // px/s above which a drag counts as a flick
+#define TOUCH_EDGE_X 12            // left-edge zone width for the back swipe
+#define TOUCH_EDGE_MIN 30          // rightward travel that triggers back
 
-static Recognizer *s_touch_tap;   // tap -> read/unread (deferred) / double tap
-static Recognizer *s_touch_swipe; // vertical flick -> prev/next or page-step
-static Recognizer *s_touch_pan;   // scroll-mode drag
 static AppTimer *s_tap_timer;     // deferred single tap / double-tap window
 static AppTimer *s_hold_timer;    // 500 ms still press -> favourite
 static bool s_hold_fired;         // the hold fired during the current touch
-static GPoint s_touch_down;       // touchdown point (hold-cancel distance)
-static int32_t s_pan_base;        // content offset at pan start
+static bool s_touch_active;       // raw subscription is live (attach idempotency)
+static bool s_dragging;           // this touch travelled past the move distance
+static GPoint s_gest_down;        // touchdown point
+static uint64_t s_gest_t0;        // touchdown time (ms)
+static int32_t s_drag_base;       // scroll-mode content offset at touchdown
+
+static void touch_handle_drag(int16_t dy, int16_t dist, uint32_t dur);
+
+//! Full millisecond clock: time_ms() only returns the sub-second portion,
+//! so the seconds part comes from the same call's tloc out-parameter.
+static uint64_t touch_now_ms(void) {
+  time_t sec = 0;
+  uint16_t ms = 0;
+  time_ms(&sec, &ms);
+  return (uint64_t)sec * 1000u + ms;
+}
 
 //! Cancel the deferred single tap (double-tap window). Called when a gesture
 //! proves not to be a tap (drag/flick starts) or the window closes.
@@ -2022,18 +2046,11 @@ static void touch_tap_cb(void *data) {
   timeline_toggle_read();
 }
 
-//! Tap recognizer: Completed = a short press without travel. The first tap
-//! defers the read-toggle by the double-tap window; a second tap inside the
-//! window enters/exits article scroll mode instead. A hold that fired during
-//! this touch consumes the tap (the favourite already happened).
-static void touch_tap_handler(const Recognizer *recognizer, RecognizerEvent ev) {
-  if (ev != RecognizerEvent_Completed || !s_tl_window || !s_touch) {
-    return;
-  }
-  if (s_hold_fired) {
-    s_hold_fired = false; // the hold on this touch already starred
-    return;
-  }
+//! A tap completed (short press, no travel): the first tap defers the
+//! read-toggle by the double-tap window; a second tap inside the window
+//! enters/exits article scroll mode instead. A hold that fired during this
+//! touch is consumed by the liftoff path before this is reached.
+static void touch_handle_tap(void) {
   if (s_advancing) {
     return;
   }
@@ -2044,6 +2061,8 @@ static void touch_tap_handler(const Recognizer *recognizer, RecognizerEvent ev) 
   if (s_tap_timer) {
     // Second tap inside the window: a double tap.
     touch_cancel_tap();
+    APP_LOG(APP_LOG_LEVEL_INFO, "touch: double tap -> %s scroll mode",
+            s_scroll_mode ? "exit" : "enter");
     if (s_scroll_mode) {
       touch_exit_scroll();
     } else {
@@ -2066,89 +2085,111 @@ static void touch_hold_cb(void *data) {
   timeline_toggle_star();
 }
 
-//! Raw touch stream: tracks the hold. Touchdown arms the 500 ms timer (only
-//! when there is an article to star); travel beyond the cancel distance or a
-//! liftoff disarms it.
+//! Raw touch stream — the whole gesture layer lives here (no recognizers).
+//! Touchdown records the anchor and arms the 500 ms hold; PositionUpdate
+//! cancels the hold and drags the scroll-mode content live; Liftoff
+//! classifies the gesture: hold (already fired) -> nothing, left-edge
+//! rightward swipe -> back, no travel -> tap (deferred / double tap),
+//! travel -> skim navigation or scroll-mode flick/edges.
 static void touch_raw_handler(const TouchEvent *event, void *context) {
   if (!s_tl_window || !s_touch) {
     return;
   }
+#if TOUCH_DEBUG
+  APP_LOG(APP_LOG_LEVEL_INFO, "touch: %s x=%d y=%d t=%llu",
+          event->type == TouchEvent_Touchdown ? "DOWN" :
+          event->type == TouchEvent_Liftoff ? "UP" : "MOVE",
+          (int)event->x, (int)event->y,
+          (unsigned long long)touch_now_ms());
+#endif
   if (event->type == TouchEvent_Touchdown) {
-    s_touch_down = GPoint(event->x, event->y);
+    s_gest_down = GPoint(event->x, event->y);
+    s_gest_t0 = touch_now_ms();
     s_hold_fired = false;
+    s_dragging = false;
     if (s_count > 0 && !s_advancing && !s_hold_timer) {
       s_hold_timer = app_timer_register(TOUCH_HOLD_MS, touch_hold_cb, NULL);
     }
-  } else if (event->type == TouchEvent_PositionUpdate) {
-    if (s_hold_timer) {
-      int16_t dx = event->x - s_touch_down.x;
-      int16_t dy = event->y - s_touch_down.y;
-      if (dx < 0) dx = (int16_t)-dx;
-      if (dy < 0) dy = (int16_t)-dy;
-      if (dx > TOUCH_HOLD_CANCEL_DIST || dy > TOUCH_HOLD_CANCEL_DIST) {
+    if (s_scroll_mode && cur_page()) {
+      s_drag_base = layer_get_frame(cur_page()->content).origin.y;
+    }
+    return;
+  }
+  if (event->type == TouchEvent_PositionUpdate) {
+    int16_t dx = (int16_t)(event->x - s_gest_down.x);
+    int16_t dy = (int16_t)(event->y - s_gest_down.y);
+    if (dx < 0) {
+      dx = (int16_t)-dx;
+    }
+    if (dy < 0) {
+      dy = (int16_t)-dy;
+    }
+    if (dx > TOUCH_MOVE_DIST || dy > TOUCH_MOVE_DIST) {
+      if (!s_dragging) {
+        s_dragging = true;
+        touch_cancel_tap(); // a drag is not the tap we deferred
+      }
+      if (s_hold_timer) {
         app_timer_cancel(s_hold_timer);
         s_hold_timer = NULL;
       }
     }
-  } else if (event->type == TouchEvent_Liftoff) {
-    if (s_hold_timer) {
-      app_timer_cancel(s_hold_timer);
-      s_hold_timer = NULL;
+    // Live drag: the content follows the finger — dragging up reveals the
+    // article's later text (the direction the user expects).
+    if (s_scroll_mode && cur_page() && s_dragging) {
+      page_set_offset(cur_page(), s_drag_base + (int32_t)(event->y - s_gest_down.y));
     }
+    return;
   }
+  // Liftoff: classify.
+  if (s_hold_timer) {
+    app_timer_cancel(s_hold_timer);
+    s_hold_timer = NULL;
+  }
+  if (s_hold_fired) {
+    s_hold_fired = false; // the hold already starred; not a tap
+    return;
+  }
+  int16_t dx = (int16_t)(event->x - s_gest_down.x);
+  int16_t dy = (int16_t)(event->y - s_gest_down.y);
+  int16_t dist = dy < 0 ? (int16_t)-dy : dy;
+  uint64_t dur = touch_now_ms() - s_gest_t0;
+  // Left-edge swipe inward: go back, like touch in the menus.
+  if (s_gest_down.x <= TOUCH_EDGE_X && dx >= TOUCH_EDGE_MIN && dx >= dist) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "touch: edge-back (dx=%d)", (int)dx);
+    timeline_back_click(NULL, NULL);
+    return;
+  }
+  if (!s_dragging) {
+    if (dist <= TOUCH_MOVE_DIST) {
+      touch_handle_tap();
+    }
+    return;
+  }
+  if (s_advancing || s_count == 0) {
+    return;
+  }
+  touch_handle_drag(dy, dist, (uint32_t)dur);
 }
 
-//! Swipe recognizer (fast vertical flick): skim view = prev/next article
-//! (swipe up = UP button = previous, swipe down = DOWN = next); scroll mode
-//! = page-step, with the edge gestures advancing/exiting. Also cancels a
-//! deferred tap once a real flick starts.
-static void touch_swipe_handler(const Recognizer *recognizer, RecognizerEvent ev) {
-  if (!s_tl_window || !s_touch) {
-    return;
-  }
-  if (ev == RecognizerEvent_Started) {
-    touch_cancel_tap(); // a flick is not the tap we deferred
-    return;
-  }
-  if (ev != RecognizerEvent_Completed || s_advancing || s_count == 0) {
-    return;
-  }
-  SwipeDirection dir = swipe_recognizer_get_direction(recognizer);
-  if (dir == SwipeDirection_None) {
-    return;
-  }
-  bool down = (dir == SwipeDirection_Down);
-  if (!s_scroll_mode) {
-    if (down) {
-      maybe_advance();
-    } else {
-      maybe_regress();
-    }
-    return;
-  }
+//! Page-step in scroll mode: ~3/4 viewport per flick (like the DOWN/UP
+//! buttons); `forward` = toward the article's later text. Reaching the very
+//! top exits scroll mode (the button's UP-at-top behavior).
+static void scroll_page_step(bool forward) {
   Page *p = cur_page();
   if (!p) {
     return;
   }
   int32_t off = layer_get_frame(p->content).origin.y;
   int32_t min_y = page_scroll_min(p);
-  if (down) {
-    if (off <= min_y + 2) {
-      maybe_advance(); // at the bottom: one more swipe down -> next article
-      return;
-    }
-    int32_t step = (s_view_h * 3) / 4;
+  int32_t step = (s_view_h * 3) / 4;
+  if (forward) {
     int32_t target = off - step;
     if (target < min_y) {
       target = min_y;
     }
     page_set_offset(p, target);
   } else {
-    if (off >= -2) {
-      touch_exit_scroll(); // at the top: swipe up returns to the skim view
-      return;
-    }
-    int32_t step = (s_view_h * 3) / 4;
     int32_t target = off + step;
     if (target > 0) {
       target = 0;
@@ -2160,83 +2201,91 @@ static void touch_swipe_handler(const Recognizer *recognizer, RecognizerEvent ev
   }
 }
 
-//! Pan recognizer (vertical drag): in scroll mode the content follows the
-//! finger in the button-mirrored direction (finger down = page-down, the
-//! same direction as a DOWN swipe/button). A drag in the skim view does
-//! nothing except cancel the deferred tap it invalidates.
-static void touch_pan_handler(const Recognizer *recognizer, RecognizerEvent ev) {
-  if (!s_tl_window || !s_touch) {
+//! A drag/flick ended (travel past TOUCH_MOVE_DIST, no hold). Skim view: any
+//! swipe of TOUCH_SWIPE_MIN+ travels navigates articles — natural direction,
+//! finger up = next (the same "up = later" as the scroll drag). Scroll mode:
+//! the drag already scrolled live; a fast flick adds a page-step, a flick
+//! past the bottom advances, a flick past the top exits scroll mode.
+static void touch_handle_drag(int16_t dy, int16_t dist, uint32_t dur) {
+  if (!s_scroll_mode) {
+    if (dist >= TOUCH_SWIPE_MIN) {
+      if (dy < 0) {
+        APP_LOG(APP_LOG_LEVEL_INFO, "touch: swipe up (dy=%d) -> next", (int)dy);
+        maybe_advance();
+      } else {
+        APP_LOG(APP_LOG_LEVEL_INFO, "touch: swipe down (dy=%d) -> prev", (int)dy);
+        maybe_regress();
+      }
+    }
     return;
   }
-  if (ev == RecognizerEvent_Started) {
-    touch_cancel_tap(); // a drag is not the tap we deferred
-    if (!s_scroll_mode) {
-      return; // drags in the skim view do nothing else
-    }
-    s_pan_base = layer_get_frame(cur_page()->content).origin.y;
-  } else if (ev == RecognizerEvent_Updated) {
-    if (!s_scroll_mode) {
+  Page *p = cur_page();
+  if (!p) {
+    return;
+  }
+  int32_t off = layer_get_frame(p->content).origin.y;
+  int32_t min_y = page_scroll_min(p);
+  uint32_t vel = dist * 1000 / (dur > 0 ? dur : 1);
+  bool flick = (dist >= TOUCH_FLICK_MIN) && (vel >= TOUCH_FLICK_VEL);
+#if TOUCH_DEBUG
+  APP_LOG(APP_LOG_LEVEL_INFO,
+          "touch: lift dy=%d dist=%d dur=%u vel=%u flick=%d off=%ld min=%ld",
+          (int)dy, (int)dist, (unsigned)dur, (unsigned)vel, (int)flick,
+          (long)off, (long)min_y);
+#endif
+  if (dy < 0) {
+    // Finger up: forward (later text).
+    if (off <= min_y + 2) {
+      APP_LOG(APP_LOG_LEVEL_INFO, "touch: flick up at bottom -> next");
+      maybe_advance(); // past the end: next article
       return;
     }
-    GPoint d = pan_recognizer_get_delta_since_start(recognizer);
-    page_set_offset(cur_page(), s_pan_base - d.y);
+    if (flick) {
+      scroll_page_step(true);
+    }
+  } else {
+    // Finger down: backward (earlier text).
+    if (off >= -2) {
+      APP_LOG(APP_LOG_LEVEL_INFO, "touch: flick down at top -> skim view");
+      touch_exit_scroll(); // past the top: back to the skim view
+      return;
+    }
+    if (flick) {
+      scroll_page_step(false);
+    }
   }
 }
 
 //! Attach the reader's touch layer: disable the window's touch bridge (the
-//! global recognizer set would otherwise swallow the stream), create and
-//! attach the recognizers, subscribe to the raw stream for the hold. The
-//! window owns the recognizers and destroys them on unload. No-op when touch
-//! is disabled or the platform stubs the API out (touch_service_is_enabled
+//! global recognizer set would otherwise swallow the stream) and subscribe
+//! to the raw touch stream. Idempotent (s_touch_active). No-op when touch is
+//! disabled or the platform stubs the API out (touch_service_is_enabled
 //! compiles to false there).
 static void touch_attach(void) {
-  if (!s_touch || !touch_service_is_enabled()) {
+  if (!s_touch || !touch_service_is_enabled() || s_touch_active) {
     return;
   }
   window_set_touch_bridge_disabled(s_tl_window, true);
-  s_touch_tap = tap_recognizer_create(touch_tap_handler, NULL);
-  s_touch_pan = pan_recognizer_create(touch_pan_handler, NULL, PanAxis_Vertical);
-  s_touch_swipe = swipe_recognizer_create(touch_swipe_handler, NULL,
-                                          SwipeDirection_Up | SwipeDirection_Down);
-  window_attach_recognizer(s_tl_window, s_touch_tap);
-  window_attach_recognizer(s_tl_window, s_touch_pan);
-  window_attach_recognizer(s_tl_window, s_touch_swipe);
   touch_service_subscribe(touch_raw_handler, NULL);
+  s_touch_active = true;
+  APP_LOG(APP_LOG_LEVEL_INFO, "touch: reader gestures armed");
 }
 
 //! Detach the reader's touch layer: cancel the pending timers, unsubscribe
-//! from the raw stream, detach and destroy the recognizers (the window is
-//! still alive when this runs from timeline_close). Idempotent.
+//! from the raw stream and re-enable the window's touch bridge. Idempotent.
 static void touch_detach(void) {
   touch_cancel_tap();
   if (s_hold_timer) {
     app_timer_cancel(s_hold_timer);
     s_hold_timer = NULL;
   }
-  touch_service_unsubscribe();
+  if (s_touch_active) {
+    touch_service_unsubscribe();
+    s_touch_active = false;
+    APP_LOG(APP_LOG_LEVEL_INFO, "touch: reader gestures disarmed");
+  }
   if (s_tl_window) {
-    if (s_touch_tap) {
-      window_detach_recognizer(s_tl_window, s_touch_tap);
-    }
-    if (s_touch_pan) {
-      window_detach_recognizer(s_tl_window, s_touch_pan);
-    }
-    if (s_touch_swipe) {
-      window_detach_recognizer(s_tl_window, s_touch_swipe);
-    }
     window_set_touch_bridge_disabled(s_tl_window, false);
-  }
-  if (s_touch_tap) {
-    recognizer_destroy(s_touch_tap);
-    s_touch_tap = NULL;
-  }
-  if (s_touch_pan) {
-    recognizer_destroy(s_touch_pan);
-    s_touch_pan = NULL;
-  }
-  if (s_touch_swipe) {
-    recognizer_destroy(s_touch_swipe);
-    s_touch_swipe = NULL;
   }
 }
 
@@ -2247,9 +2296,7 @@ void timeline_touch_apply(void) {
     return;
   }
   if (s_touch && touch_service_is_enabled()) {
-    if (!s_touch_tap && !s_touch_pan && !s_touch_swipe) {
-      touch_attach();
-    }
+    touch_attach();
   } else {
     touch_detach();
   }

@@ -11,8 +11,8 @@ articles full-screen, mark read, star favourites, highlight words.
 - In the reader: swipe up/down jumps between articles, tap toggles
   read/unread, press-and-hold stars a favourite, double tap scrolls
   inside long articles — drag to read, double tap to get back
-- Touch on by default; switch it off in the phone settings if firmware
-  touch bugs bite
+- Swipe in from the left screen edge to go back, like in the menus
+- Touch on by default; switch it off in the phone settings
 
 **v0.3.42**
 - Both bottom-line hints in the accent color — "HOLD ▼: Scroll" on
@@ -39,26 +39,35 @@ articles full-screen, mark read, star favourites, highlight words.
 
 - **Full touch support** (emery/gabbro; the 64 KB-class SDK stubs the
   touch APIs out, so those builds are unchanged). Touch is ON by
-  default; the phone-settings toggle stays as an escape hatch.
+  default; the phone-settings toggle stays as an escape hatch (now a
+  bare toggle, no caveat text).
 - **Menus.** The system touch bridge (already wired, now default-on)
   gives every menu swipe-scroll + tap-select; on the root menu a swipe
   up on the first entry opens the settings sub-menu — exactly like the
   UP button.
-- **Reader gestures** (new custom recognizer layer):
-  - swipe up/down = previous/next article (mirrors the buttons),
+- **Reader gestures** (raw touch stream; no recognizers — the SDK's
+  tap/swipe recognizers proved unreliable and directionally inverted on
+  the target firmware, while the raw stream works):
+  - swipe up = next article, swipe down = previous (natural: up =
+    later, the same direction as the scroll drag),
   - tap = read/unread (deferred 350 ms so a double tap can win),
   - tap hold (500 ms) = favourite,
   - double tap = enter/exit article scroll mode (long articles only,
     same gate as HOLD DOWN),
-  - in scroll mode: drag scrolls (finger-down = page-down), vertical
-    flicks page-step, a swipe down at the article bottom advances to
-    the next, a swipe up at the top exits back to the skim view.
-  The reader window disables the touch bridge and attaches its own
-  tap/swipe/pan recognizers plus the raw touch stream (the recognizer
-  set has no long-press gesture, so the hold is a raw 500 ms still
-  press whose fired state suppresses the tap on liftoff).
+  - in scroll mode: the content follows the finger (drag up = the
+    article scrolls down), a fast flick page-steps, a flick up at the
+    article bottom advances to the next, a flick down at the top exits
+    back to the skim view,
+  - a swipe from the left screen border to the inside goes back —
+    exactly like touch in the menus.
+  The hold is a raw 500 ms still press whose fired state suppresses
+  the tap on liftoff; the single-tap action is deferred through the
+  double-tap window.
 - `timeline_touch_apply()` re-attaches/tears the reader gestures down
   when TouchEnabled changes while reading.
+- Debug build: flip `TOUCH_DEBUG` to 1 in timeline.c to log every raw
+  touch event (type, x, y, ms) and gesture classification; capture with
+  `pebble logs` to trace the firmware's real touch behavior on device.
 
 ## 0.3.42
 
