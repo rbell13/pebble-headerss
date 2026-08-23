@@ -10,8 +10,11 @@ articles full-screen, mark read, star favourites, highlight words.
   menus, tap to open
 - In the reader: swipe up/down jumps between articles, tap toggles
   read/unread, press-and-hold stars a favourite, double tap scrolls
-  inside long articles — drag to read, double tap to get back
+  inside long articles — drag to read, double tap to get back to the
+  same article
 - Swipe in from the left screen edge to go back, like in the menus
+- On the main menu: pull down from the top entry to open the settings
+  — the 3-dot bar lights up when the pull arms, drag back up to cancel
 - Touch on by default; switch it off in the phone settings
 
 **v0.3.42**
@@ -54,12 +57,25 @@ articles full-screen, mark read, star favourites, highlight words.
   - tap hold (500 ms) = favourite,
   - double tap = enter/exit article scroll mode (long articles only,
     same gate as HOLD DOWN),
-  - in scroll mode: the content follows the finger (drag up = the
-    article scrolls down), a fast flick page-steps, a flick up at the
-    article bottom advances to the next, a flick down at the top exits
-    back to the skim view,
+  - in scroll mode the article is locked in: the content follows the
+    finger (drag up = the article scrolls down), a fast flick
+    page-steps, both ends are clamped no-ops, and only a double tap
+    leaves scroll mode — staying on the same article,
   - a swipe from the left screen border to the inside goes back —
     exactly like touch in the menus.
+- **Root menu pull-down**: the settings open only when the pull STARTED
+  on the very top entry and is RELEASED while armed. Crossing the arm
+  distance inverts the 3-dot bar to the accent fill — the "releasing
+  now opens settings" cue — and dragging back up un-arms it (highlight
+  off, no settings). A pull that merely ends at the top (upscroll) can
+  never trigger it.
+- **Fix: tapping a stream on the root menu no longer bounces back.** The
+  reader's touch layer armed itself on the liftoff of the menu tap that
+  opened it, and that stray liftoff (no touchdown seen) read as a
+  phantom left-edge back-swipe (dx = tap position), popping the reader
+  the instant it appeared — "All unread"/"Starred"/"Important" seemed
+  dead. Both raw touch handlers now ignore orphan events without a
+  preceding touchdown in their own subscription.
   The hold is a raw 500 ms still press whose fired state suppresses
   the tap on liftoff; the single-tap action is deferred through the
   double-tap window.

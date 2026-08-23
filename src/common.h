@@ -29,11 +29,12 @@
 //! basalt-class platforms 64 KB — bigger window on the target watch keeps
 //! more read articles re-openable in a session.
 #if defined(PBL_PLATFORM_EMERY)
-// 68 (was 72): .text+.data+.bss must stay <= 65535 B (uint16 virtual_size).
-// The 0.3.0 reader overhaul (full title, sidebar icons, auto-mark timer,
-// full-summary assembly) pushed emery to 65512 B; 68 articles keeps a small
-// emery advantage over the 64-article platforms with ~1 KB of headroom.
-#define MAX_ARTICLES 68
+// 64 (was 68, 72 before that): .text+.data+.bss must stay <= 65535 B
+// (uint16 virtual_size). The 0.3.43 touch layer (reader gestures + root-menu
+// pull-down) pushed emery to 65505 B; 64 articles restores ~1 KB of headroom
+// at the cost of the old emery-only advantage (the touch feature is worth
+// more than 4 extra ring slots).
+#define MAX_ARTICLES 64
 #elif defined(PBL_PLATFORM_GABBRO)
 #define MAX_ARTICLES 64
 #else

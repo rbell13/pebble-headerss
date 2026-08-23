@@ -1940,11 +1940,12 @@ static void timeline_click_config_provider(void *ctx) {
 //                 (natural: up = later, same direction as the scroll drag)
 //                 tap = read/unread, tap hold (500 ms) = favourite,
 //                 double tap = enter article scroll
-//   scroll mode:  the content follows the finger (drag up = article scrolls
-//                 down = later text), a fast flick page-steps in the flick
-//                 direction, a flick up at the bottom advances to the next
-//                 article, a flick down at the top exits scroll mode, double
-//                 tap exits. Tap/hold keep their skim-mode actions.
+//   scroll mode:  the article is locked in — the content follows the finger
+//                 (drag up = article scrolls down = later text), a fast
+//                 flick page-steps in the flick direction, both ends are
+//                 clamped no-ops (no advance, no exit), and ONLY a double
+//                 tap leaves scroll mode, staying on the same article.
+//                 Tap/hold keep their skim-mode actions.
 //   left edge:    a swipe from the left screen border to the inside goes
 //                 back (window_stack_pop), exactly like touch in the menus.
 // The single-tap action is deferred by the double-tap window; a second tap
@@ -1977,6 +1978,7 @@ static AppTimer *s_hold_timer;    // 500 ms still press -> favourite
 static bool s_hold_fired;         // the hold fired during the current touch
 static bool s_touch_active;       // raw subscription is live (attach idempotency)
 static bool s_dragging;           // this touch travelled past the move distance
+static bool s_gest_active;        // a Touchdown was seen for the current touch
 static GPoint s_gest_down;        // touchdown point
 static uint64_t s_gest_t0;        // touchdown time (ms)
 static int32_t s_drag_base;       // scroll-mode content offset at touchdown
@@ -2091,6 +2093,12 @@ static void touch_hold_cb(void *data) {
 //! classifies the gesture: hold (already fired) -> nothing, left-edge
 //! rightward swipe -> back, no travel -> tap (deferred / double tap),
 //! travel -> skim navigation or scroll-mode flick/edges.
+//! The s_gest_active guard drops ORPHAN events: the subscription can start
+//! mid-gesture (the reader opens on the liftoff of the menu tap that pushed
+//! it, and the tap's own liftoff is delivered to the freshly-subscribed
+//! handler) — without a seen Touchdown the anchor is stale and a stray
+//! liftoff would read as a phantom edge-swipe (dx = tap position) and pop
+//! the reader instantly.
 static void touch_raw_handler(const TouchEvent *event, void *context) {
   if (!s_tl_window || !s_touch) {
     return;
@@ -2107,6 +2115,7 @@ static void touch_raw_handler(const TouchEvent *event, void *context) {
     s_gest_t0 = touch_now_ms();
     s_hold_fired = false;
     s_dragging = false;
+    s_gest_active = true;
     if (s_count > 0 && !s_advancing && !s_hold_timer) {
       s_hold_timer = app_timer_register(TOUCH_HOLD_MS, touch_hold_cb, NULL);
     }
@@ -2116,6 +2125,9 @@ static void touch_raw_handler(const TouchEvent *event, void *context) {
     return;
   }
   if (event->type == TouchEvent_PositionUpdate) {
+    if (!s_gest_active) {
+      return;
+    }
     int16_t dx = (int16_t)(event->x - s_gest_down.x);
     int16_t dy = (int16_t)(event->y - s_gest_down.y);
     if (dx < 0) {
@@ -2142,6 +2154,10 @@ static void touch_raw_handler(const TouchEvent *event, void *context) {
     return;
   }
   // Liftoff: classify.
+  if (!s_gest_active) {
+    return; // orphan liftoff (subscribed mid-gesture): not our touch
+  }
+  s_gest_active = false;
   if (s_hold_timer) {
     app_timer_cancel(s_hold_timer);
     s_hold_timer = NULL;
@@ -2173,8 +2189,9 @@ static void touch_raw_handler(const TouchEvent *event, void *context) {
 }
 
 //! Page-step in scroll mode: ~3/4 viewport per flick (like the DOWN/UP
-//! buttons); `forward` = toward the article's later text. Reaching the very
-//! top exits scroll mode (the button's UP-at-top behavior).
+//! buttons); `forward` = toward the article's later text. Clamped at both
+//! ends — scroll mode is locked to the article, so reaching an edge is a
+//! no-op, never an exit or an advance (only a double tap leaves).
 static void scroll_page_step(bool forward) {
   Page *p = cur_page();
   if (!p) {
@@ -2195,17 +2212,15 @@ static void scroll_page_step(bool forward) {
       target = 0;
     }
     page_set_offset(p, target);
-    if (target == 0) {
-      touch_exit_scroll(); // reaching the top exits scroll mode (like UP)
-    }
   }
 }
 
 //! A drag/flick ended (travel past TOUCH_MOVE_DIST, no hold). Skim view: any
 //! swipe of TOUCH_SWIPE_MIN+ travels navigates articles — natural direction,
 //! finger up = next (the same "up = later" as the scroll drag). Scroll mode:
-//! the drag already scrolled live; a fast flick adds a page-step, a flick
-//! past the bottom advances, a flick past the top exits scroll mode.
+//! the drag already scrolled live; a fast flick adds a page-step. The
+//! article is locked in: nothing here advances or exits — only a double tap
+//! leaves scroll mode (staying on the same article).
 static void touch_handle_drag(int16_t dy, int16_t dist, uint32_t dur) {
   if (!s_scroll_mode) {
     if (dist >= TOUCH_SWIPE_MIN) {
@@ -2223,36 +2238,17 @@ static void touch_handle_drag(int16_t dy, int16_t dist, uint32_t dur) {
   if (!p) {
     return;
   }
-  int32_t off = layer_get_frame(p->content).origin.y;
-  int32_t min_y = page_scroll_min(p);
   uint32_t vel = dist * 1000 / (dur > 0 ? dur : 1);
   bool flick = (dist >= TOUCH_FLICK_MIN) && (vel >= TOUCH_FLICK_VEL);
 #if TOUCH_DEBUG
+  int32_t off = layer_get_frame(p->content).origin.y;
   APP_LOG(APP_LOG_LEVEL_INFO,
-          "touch: lift dy=%d dist=%d dur=%u vel=%u flick=%d off=%ld min=%ld",
+          "touch: lift dy=%d dist=%d dur=%u vel=%u flick=%d off=%ld",
           (int)dy, (int)dist, (unsigned)dur, (unsigned)vel, (int)flick,
-          (long)off, (long)min_y);
+          (long)off);
 #endif
-  if (dy < 0) {
-    // Finger up: forward (later text).
-    if (off <= min_y + 2) {
-      APP_LOG(APP_LOG_LEVEL_INFO, "touch: flick up at bottom -> next");
-      maybe_advance(); // past the end: next article
-      return;
-    }
-    if (flick) {
-      scroll_page_step(true);
-    }
-  } else {
-    // Finger down: backward (earlier text).
-    if (off >= -2) {
-      APP_LOG(APP_LOG_LEVEL_INFO, "touch: flick down at top -> skim view");
-      touch_exit_scroll(); // past the top: back to the skim view
-      return;
-    }
-    if (flick) {
-      scroll_page_step(false);
-    }
+  if (flick) {
+    scroll_page_step(dy < 0); // finger up = forward (later text)
   }
 }
 
@@ -2268,6 +2264,7 @@ static void touch_attach(void) {
   window_set_touch_bridge_disabled(s_tl_window, true);
   touch_service_subscribe(touch_raw_handler, NULL);
   s_touch_active = true;
+  s_gest_active = false; // a fresh subscription sees no in-flight gesture
   APP_LOG(APP_LOG_LEVEL_INFO, "touch: reader gestures armed");
 }
 

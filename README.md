@@ -42,11 +42,11 @@ reading view with a black top bar, editorial headings and an accent sidebar
 - **Touch** (Time 2 class watches, on by default) — menus: swipe scrolls,
   tap selects, a swipe up on the top entry opens the sub-menu; reader:
   swipe up = next article, swipe down = previous, tap toggles read/unread,
-  press-and-hold stars, double tap enters article scroll — drag to read
-  (drag up = the article scrolls down), double tap again or a flick down
-  at the top gets back, a flick up at the article bottom moves on; a swipe
-  in from the left screen edge goes back, like in the menus. Switch off in
-  the phone settings
+  press-and-hold stars, double tap enters article scroll — the article is
+  locked in: drag to read (drag up = the article scrolls down), flicks
+  page-step, only a double tap leaves (staying on the same article); a
+  swipe in from the left screen edge goes back, like in the menus. Switch
+  off in the phone settings
 - **Unread only** — watch toggle (sub-menu): hides read articles from the
   server for feed/folder streams; "All unread" always shows only unread
 - **Star** — long-press SELECT toggles the star; starred articles show a
@@ -68,12 +68,15 @@ reading view with a black top bar, editorial headings and an accent sidebar
   accent stream name, editorial headings (theme color, accent feed·time +
   rule), accent sidebar (clock / unread dot / star / M); light theme
   selectable from the phone settings or the watch's Theme row
-- **Settings** — UP on the top black strip opens the watch sub-menu:
-  Refresh, Mark all read, **Auto mark read** (Never / Immediately / 1s /
-  2s / 3s / 5s / 10s), Unread only, **Theme** (System / Dark / Light),
-  Important row / Progress line toggles; the connection/appearance page
-  lives in the phone app settings (Clay): FreshRSS URL, username, API
-  password, accent color, touch, highlight words
+- **Settings** — UP on the top black strip (or, on touch watches, a
+  pull-down that starts on the very top entry: drag down until the
+  3-dot bar lights up in the accent color, then release — dragging
+  back up cancels) opens the watch sub-menu: Refresh, Mark all read,
+  **Auto mark read** (Never / Immediately / 1s / 2s / 3s / 5s / 10s),
+  Unread only, **Theme** (System / Dark / Light), Important row /
+  Progress line toggles; the connection/appearance page lives in the
+  phone app settings (Clay): FreshRSS URL, username, API password,
+  accent color, touch, highlight words
 
   ![Sub-menu](resources/store/menu_2.png)
 

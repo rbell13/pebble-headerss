@@ -107,6 +107,17 @@ static GPath *s_icon_star;
 static GPath *s_icon_folder;
 static GPath *s_icon_news;
 
+// Pull-down gesture state (touch): s_pull_armed drives the 3-dot bar's
+// armed highlight in main_draw_row, so it lives with the other statics.
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
+static bool s_pull_active;       // raw subscription live (root menu is top)
+static bool s_pull_down_at_top;  // selection was on the top entry at touchdown
+static bool s_pull_gest_active;  // a Touchdown was seen for the current touch
+static bool s_pull_armed;        // the pull crossed the arm distance (bar lit)
+static GPoint s_pull_down;       // touchdown point
+static Animation *s_pull_anim;   // snap-back animation
+#endif
+
 static void push_folder_window(const char *id, const char *name);
 static void push_submenu_window(void);
 static void push_mode_window(void);
@@ -667,12 +678,19 @@ static void main_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
 
   if (row == 0) {
     // Accent strip: the UP entry row doubles as the app's color header.
-    // Black bar with accent dots (inverted from the old solid-accent bar).
-    graphics_context_set_fill_color(ctx, GColorBlack);
+    // Black bar with accent dots by default; while the pull-down gesture is
+    // armed the bar INVERTS (accent fill, black dots) — releasing the pull
+    // then opens the settings, and the lit bar is the user's cue.
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
+    bool armed = s_pull_armed;
+#else
+    bool armed = false;
+#endif
+    graphics_context_set_fill_color(ctx, armed ? s_accent : GColorBlack);
     graphics_fill_rect(ctx, bounds, 0, GCornerNone);
     int16_t cx = bounds.size.w / 2;
     int16_t cy = bounds.size.h / 2;
-    graphics_context_set_fill_color(ctx, s_accent);
+    graphics_context_set_fill_color(ctx, armed ? GColorBlack : s_accent);
     for (int i = -1; i <= 1; i++) {
       graphics_fill_circle(ctx, GPoint(cx + i * 8, cy), 3);
     }
@@ -834,12 +852,160 @@ static void main_window_load(Window *window) {
 }
 
 static void main_window_unload(Window *window) {
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
+  if (s_pull_anim) {
+    Animation *old = s_pull_anim;
+    s_pull_anim = NULL;
+    animation_unschedule(old); // never animate a destroyed menu
+  }
+#endif
   menu_layer_destroy(s_main_menu);
   s_main_menu = NULL;
 }
 
+// ---------------------------------------------------------------------------
+// Root-menu pull-down gesture (touch). The settings can only be entered by a
+// pull that STARTED on the very top entry of the main menu (an upscroll that
+// just reaches the top can never arm it) and was RELEASED while armed: once
+// the downward drag crosses PULL_ARM_DIST the narrow 3-dot bar at the top
+// inverts to the accent fill — the "releasing now enters settings" cue —
+// and dragging back up below the distance un-arms it again (highlight off,
+// no settings on release). Only a release with the bar lit pushes the
+// settings sub-menu, exactly like pressing UP on the top entry. The raw
+// subscription is scoped by window appear/disappear: it is live only while
+// the root menu is the top window, so it never reads touches meant for
+// covered windows. Platform scope: emery/gabbro only, like the reader touch.
+// ---------------------------------------------------------------------------
+
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
+
+#define PULL_ARM_DIST 45   // px of downward travel that arms the settings pull
+#define PULL_ENGAGE 8      // px before the rubber band engages (tap dead zone)
+#define PULL_BAND_MAX 16   // px the sheet may shift (rubber-band feel)
+#define PULL_BAND_FACTOR 2 // resistance: shift = pull / 2
+
+//! Raw touch stream: watches for the rubber-band pull only. All other
+//! gestures (swipe scroll, tap select) stay with the touch bridge. The
+//! s_pull_gest_active guard drops orphan events (a subscription can start
+//! mid-gesture when the window appears during a pop), so a stray liftoff
+//! with a stale anchor never reads as a pull.
+//! Arming contract: the pull may only arm when it STARTED on the top entry
+//! (s_pull_down_at_top — an upscroll that ends at the top can never arm),
+//! the selection is still on the top entry, and the drag has travelled past
+//! PULL_ARM_DIST. Crossing that distance lights the 3-dot bar (armed
+//! highlight); dragging back below it un-arms (highlight off). Only a
+//! release while armed enters the settings.
+static void main_touch_handler(const TouchEvent *event, void *context) {
+  if (!s_main_menu || !s_touch) {
+    return;
+  }
+  if (event->type == TouchEvent_Touchdown) {
+    s_pull_down = GPoint(event->x, event->y);
+    s_pull_down_at_top = menu_layer_get_selected_index(s_main_menu).row <= 1;
+    s_pull_gest_active = true;
+    s_pull_armed = false; // a fresh touch starts unarmed
+    if (s_pull_anim) {
+      Animation *old = s_pull_anim;
+      s_pull_anim = NULL;
+      animation_unschedule(old);
+    }
+    return;
+  }
+  if (!s_pull_gest_active) {
+    return; // orphan MOVE/liftoff: not our touch
+  }
+  Layer *ml = menu_layer_get_layer(s_main_menu);
+  GRect f = layer_get_frame(ml);
+  if (event->type == TouchEvent_PositionUpdate) {
+    int16_t dy = (int16_t)(event->y - s_pull_down.y);
+    bool at_top_now = menu_layer_get_selected_index(s_main_menu).row <= 1;
+    // Arm/disarm: only a pull that started on the top entry and is still at
+    // the top crosses the arm distance. The lit bar is the "releasing now
+    // enters settings" cue, so it must mirror the trigger exactly.
+    bool armed = s_pull_down_at_top && at_top_now && dy >= PULL_ARM_DIST;
+    if (armed != s_pull_armed) {
+      s_pull_armed = armed;
+      layer_mark_dirty(ml); // the 3-dot bar highlight follows the state
+    }
+    // Rubber band: shift the sheet down (resisted) while pulling down at the
+    // top; dragging back up lets the sheet follow back to rest.
+    int16_t frame_y = 0;
+    if (s_pull_down_at_top && at_top_now && dy >= PULL_ENGAGE) {
+      frame_y = (dy - PULL_ENGAGE) / PULL_BAND_FACTOR;
+      if (frame_y > PULL_BAND_MAX) {
+        frame_y = PULL_BAND_MAX;
+      }
+    }
+    if (f.origin.y != frame_y) {
+      layer_set_frame(ml, GRect(0, frame_y, f.size.w, f.size.h));
+    }
+    return;
+  }
+  // Liftoff: enter settings only when the armed state was actually shown
+  // (release-while-armed is the contract the highlight promised).
+  s_pull_gest_active = false;
+  bool at_top = menu_layer_get_selected_index(s_main_menu).row <= 1;
+  if (s_pull_down_at_top && at_top && s_pull_armed) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "touch: pull down -> settings");
+    s_pull_armed = false;
+    if (f.origin.y != 0) { // put the sheet back before it gets covered
+      layer_set_frame(ml, GRect(0, 0, f.size.w, f.size.h));
+    }
+    push_submenu_window();
+    return;
+  }
+  // No trigger: clear the highlight and snap the sheet back.
+  if (s_pull_armed) {
+    s_pull_armed = false;
+    layer_mark_dirty(ml);
+  }
+  if (f.origin.y != 0) {
+    GRect from = f;
+    GRect to = GRect(0, 0, f.size.w, f.size.h);
+    s_pull_anim = (Animation *)property_animation_create_layer_frame(ml,
+                                                                     &from, &to);
+    animation_set_duration(s_pull_anim, 150);
+    animation_set_curve(s_pull_anim, AnimationCurveEaseOut);
+    animation_schedule(s_pull_anim);
+  }
+}
+
+//! Arm the pull-down gesture while the root menu is the top window.
+static void pull_arm(void) {
+  if (!s_pull_active && s_touch && touch_service_is_enabled()) {
+    touch_service_subscribe(main_touch_handler, NULL);
+    s_pull_active = true;
+    s_pull_gest_active = false; // a fresh subscription sees no in-flight touch
+  }
+}
+
+//! Disarm it when another window covers the root menu.
+static void pull_disarm(void) {
+  if (s_pull_active) {
+    touch_service_unsubscribe();
+    s_pull_active = false;
+  }
+  if (s_pull_armed) { // never leave the 3-dot bar lit while covered
+    s_pull_armed = false;
+    if (s_main_menu) {
+      layer_mark_dirty(menu_layer_get_layer(s_main_menu));
+    }
+  }
+}
+
+#endif // touch-capable platforms
+
 static void main_window_appear(Window *window) {
   menu_layer_reload_data(s_main_menu); // badges may have changed underneath
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
+  pull_arm();
+#endif
+}
+
+static void main_window_disappear(Window *window) {
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
+  pull_disarm();
+#endif
 }
 
 static void push_main_window(void) {
@@ -847,6 +1013,7 @@ static void push_main_window(void) {
   window_set_window_handlers(s_main_window, (WindowHandlers){
     .load = main_window_load,
     .appear = main_window_appear,
+    .disappear = main_window_disappear,
     .unload = main_window_unload,
   });
   window_stack_push(s_main_window, true);
