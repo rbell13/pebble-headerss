@@ -883,6 +883,10 @@ static void main_window_unload(Window *window) {
 #define PULL_ENGAGE 8      // px before the rubber band engages (tap dead zone)
 #define PULL_BAND_MAX 16   // px the sheet may shift (rubber-band feel)
 #define PULL_BAND_FACTOR 2 // resistance: shift = pull / 2
+// The pull must START physically in the top band of the screen — the 3-dot
+// strip plus the first data row (~70 px) — so a scroll gesture that begins
+// mid-list (wherever the finger lands) can never arm the settings pull.
+#define PULL_TOP_ZONE 70
 
 //! Raw touch stream: watches for the rubber-band pull only. All other
 //! gestures (swipe scroll, tap select) stay with the touch bridge. The
@@ -901,9 +905,14 @@ static void main_touch_handler(const TouchEvent *event, void *context) {
   }
   if (event->type == TouchEvent_Touchdown) {
     s_pull_down = GPoint(event->x, event->y);
-    s_pull_down_at_top = menu_layer_get_selected_index(s_main_menu).row <= 1;
+    MenuIndex mi = menu_layer_get_selected_index(s_main_menu);
+    // "At the very top" = the selection is on the first entry AND the finger
+    // lands in the top band of the screen. Both are latched for the gesture.
+    s_pull_down_at_top = (mi.row <= 1) && (event->y <= PULL_TOP_ZONE);
     s_pull_gest_active = true;
     s_pull_armed = false; // a fresh touch starts unarmed
+    APP_LOG(APP_LOG_LEVEL_INFO, "touch: pull down y=%d row=%u top=%d",
+            (int)event->y, (unsigned)mi.row, (int)s_pull_down_at_top);
     if (s_pull_anim) {
       Animation *old = s_pull_anim;
       s_pull_anim = NULL;
@@ -926,6 +935,8 @@ static void main_touch_handler(const TouchEvent *event, void *context) {
     if (armed != s_pull_armed) {
       s_pull_armed = armed;
       layer_mark_dirty(ml); // the 3-dot bar highlight follows the state
+      APP_LOG(APP_LOG_LEVEL_INFO, "touch: pull %s (dy=%d)",
+              armed ? "armed" : "disarmed", (int)dy);
     }
     // Rubber band: shift the sheet down (resisted) while pulling down at the
     // top; dragging back up lets the sheet follow back to rest.
