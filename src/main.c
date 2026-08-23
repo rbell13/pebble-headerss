@@ -887,6 +887,20 @@ static void main_window_unload(Window *window) {
 // strip plus the first data row (~70 px) — so a scroll gesture that begins
 // mid-list (wherever the finger lands) can never arm the settings pull.
 #define PULL_TOP_ZONE 70
+// The menu CONTENT must be at its very top. The selection index is NOT a
+// reliable signal here: on the target firmware the touch bridge scrolls the
+// menu's content directly without moving the selection (it stays on the
+// first row), so the internal ScrollLayer's content offset is the truth.
+#define PULL_TOP_OFFSET_TOL 4 // px of tolerance around offset 0
+
+//! Is the root menu's content scrolled to its very top?
+static bool menu_at_top(void) {
+  ScrollLayer *sl = menu_layer_get_scroll_layer(s_main_menu);
+  if (!sl) {
+    return false;
+  }
+  return scroll_layer_get_content_offset(sl).y >= -PULL_TOP_OFFSET_TOL;
+}
 
 //! Raw touch stream: watches for the rubber-band pull only. All other
 //! gestures (swipe scroll, tap select) stay with the touch bridge. The
@@ -905,14 +919,16 @@ static void main_touch_handler(const TouchEvent *event, void *context) {
   }
   if (event->type == TouchEvent_Touchdown) {
     s_pull_down = GPoint(event->x, event->y);
-    MenuIndex mi = menu_layer_get_selected_index(s_main_menu);
-    // "At the very top" = the selection is on the first entry AND the finger
+    // "At the very top" = the menu CONTENT is at offset 0 AND the finger
     // lands in the top band of the screen. Both are latched for the gesture.
-    s_pull_down_at_top = (mi.row <= 1) && (event->y <= PULL_TOP_ZONE);
+    s_pull_down_at_top = menu_at_top() && (event->y <= PULL_TOP_ZONE);
     s_pull_gest_active = true;
     s_pull_armed = false; // a fresh touch starts unarmed
-    APP_LOG(APP_LOG_LEVEL_INFO, "touch: pull down y=%d row=%u top=%d",
-            (int)event->y, (unsigned)mi.row, (int)s_pull_down_at_top);
+    ScrollLayer *sl = menu_layer_get_scroll_layer(s_main_menu);
+    APP_LOG(APP_LOG_LEVEL_INFO, "touch: pull down y=%d off=%ld top=%d",
+            (int)event->y,
+            (long)(sl ? scroll_layer_get_content_offset(sl).y : 0),
+            (int)s_pull_down_at_top);
     if (s_pull_anim) {
       Animation *old = s_pull_anim;
       s_pull_anim = NULL;
@@ -927,8 +943,8 @@ static void main_touch_handler(const TouchEvent *event, void *context) {
   GRect f = layer_get_frame(ml);
   if (event->type == TouchEvent_PositionUpdate) {
     int16_t dy = (int16_t)(event->y - s_pull_down.y);
-    bool at_top_now = menu_layer_get_selected_index(s_main_menu).row <= 1;
-    // Arm/disarm: only a pull that started on the top entry and is still at
+    bool at_top_now = menu_at_top();
+    // Arm/disarm: only a pull that started at the very top and is still at
     // the top crosses the arm distance. The lit bar is the "releasing now
     // enters settings" cue, so it must mirror the trigger exactly.
     bool armed = s_pull_down_at_top && at_top_now && dy >= PULL_ARM_DIST;
@@ -955,7 +971,7 @@ static void main_touch_handler(const TouchEvent *event, void *context) {
   // Liftoff: enter settings only when the armed state was actually shown
   // (release-while-armed is the contract the highlight promised).
   s_pull_gest_active = false;
-  bool at_top = menu_layer_get_selected_index(s_main_menu).row <= 1;
+  bool at_top = menu_at_top();
   if (s_pull_down_at_top && at_top && s_pull_armed) {
     APP_LOG(APP_LOG_LEVEL_INFO, "touch: pull down -> settings");
     s_pull_armed = false;

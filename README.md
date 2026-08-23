@@ -69,10 +69,10 @@ reading view with a black top bar, editorial headings and an accent sidebar
   rule), accent sidebar (clock / unread dot / star / M); light theme
   selectable from the phone settings or the watch's Theme row
 - **Settings** — UP on the top black strip (or, on touch watches, a
-  pull-down that starts with the finger in the top band on the first
-  entry: drag down until the 3-dot bar lights up in the accent color,
-  then release — dragging back up cancels) opens the watch sub-menu:
-  Refresh, Mark all read,
+  pull-down that only arms when the menu is at its very top and the
+  finger starts in the top band: drag down until the 3-dot bar lights
+  up in the accent color, then release — dragging back up cancels)
+  opens the watch sub-menu: Refresh, Mark all read,
   **Auto mark read** (Never / Immediately / 1s / 2s / 3s / 5s / 10s),
   Unread only, **Theme** (System / Dark / Light), Important row /
   Progress line toggles; the connection/appearance page lives in the

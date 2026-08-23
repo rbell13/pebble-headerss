@@ -64,11 +64,13 @@ articles full-screen, mark read, star favourites, highlight words.
   - a swipe from the left screen border to the inside goes back —
     exactly like touch in the menus.
 - **Root menu pull-down**: the settings open only when the pull STARTED
-  on the very top entry and is RELEASED while armed. Crossing the arm
-  distance inverts the 3-dot bar to the accent fill — the "releasing
-  now opens settings" cue — and dragging back up un-arms it (highlight
-  off, no settings). A pull that merely ends at the top (upscroll) can
-  never trigger it.
+  with the menu content at its very top (the menu's real scroll offset,
+  not the selection — the touch bridge scrolls the content without
+  moving the selection on this firmware) with the finger in the top
+  band, and is RELEASED while armed. Crossing the arm distance inverts
+  the 3-dot bar to the accent fill — the "releasing now opens settings"
+  cue — and dragging back up un-arms it (highlight off, no settings).
+  A pull that merely ends at the top (upscroll) can never trigger it.
 - **Fix: tapping a stream on the root menu no longer bounces back.** The
   reader's touch layer armed itself on the liftoff of the menu tap that
   opened it, and that stray liftoff (no touchdown seen) read as a
