@@ -366,6 +366,7 @@ void proto_handle_inbox(DictionaryIterator *iter) {
     storage_save_settings();
     apply_settings();
     (void)app_touch_navigation_enable(s_touch);
+    timeline_touch_apply(); // an open reader attaches/drops its gestures
     return;
   }
 

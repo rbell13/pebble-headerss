@@ -5,6 +5,15 @@
 **HeadeRSS** — FreshRSS on your wrist: browse your feed tree, read
 articles full-screen, mark read, star favourites, highlight words.
 
+**v0.3.43**
+- Full touch support on touch watches (Time 2 class): swipe through
+  menus, tap to open
+- In the reader: swipe up/down jumps between articles, tap toggles
+  read/unread, press-and-hold stars a favourite, double tap scrolls
+  inside long articles — drag to read, double tap to get back
+- Touch on by default; switch it off in the phone settings if firmware
+  touch bugs bite
+
 **v0.3.42**
 - Both bottom-line hints in the accent color — "HOLD ▼: Scroll" on
   long articles, "HOLD ▼: Next" at the end of a scroll
@@ -25,6 +34,31 @@ articles full-screen, mark read, star favourites, highlight words.
 - Star favourites, unread-only mode, auto-mark-read, per-feed
   mark-all-read
 - Highlight words survive reinstalls
+
+## 0.3.43
+
+- **Full touch support** (emery/gabbro; the 64 KB-class SDK stubs the
+  touch APIs out, so those builds are unchanged). Touch is ON by
+  default; the phone-settings toggle stays as an escape hatch.
+- **Menus.** The system touch bridge (already wired, now default-on)
+  gives every menu swipe-scroll + tap-select; on the root menu a swipe
+  up on the first entry opens the settings sub-menu — exactly like the
+  UP button.
+- **Reader gestures** (new custom recognizer layer):
+  - swipe up/down = previous/next article (mirrors the buttons),
+  - tap = read/unread (deferred 350 ms so a double tap can win),
+  - tap hold (500 ms) = favourite,
+  - double tap = enter/exit article scroll mode (long articles only,
+    same gate as HOLD DOWN),
+  - in scroll mode: drag scrolls (finger-down = page-down), vertical
+    flicks page-step, a swipe down at the article bottom advances to
+    the next, a swipe up at the top exits back to the skim view.
+  The reader window disables the touch bridge and attaches its own
+  tap/swipe/pan recognizers plus the raw touch stream (the recognizer
+  set has no long-press gesture, so the hold is a raw 500 ms still
+  press whose fired state suppresses the tap on liftoff).
+- `timeline_touch_apply()` re-attaches/tears the reader gestures down
+  when TouchEnabled changes while reading.
 
 ## 0.3.42
 

@@ -176,7 +176,8 @@ void storage_highlight_set_words(const char *csv) {
 // ---------------------------------------------------------------------------
 
 //! Load all settings from flash. Missing keys fall back to the defaults:
-//! cobalt blue accent, light theme, no touch navigation, MARK_NOW auto-mark.
+//! cobalt blue accent, light theme, touch navigation ON (the setting is an
+//! escape hatch while firmware touch bugs persist), MARK_NOW auto-mark.
 void storage_load(void) {
   uint32_t accent_hex = (uint32_t)persist_read_int(PERSIST_KEY_ACCENT);
   if (accent_hex <= 255) {
@@ -196,7 +197,10 @@ void storage_load(void) {
     }
   }
   s_theme = (int8_t)tm;
-  s_touch = persist_read_int(PERSIST_KEY_TOUCH) != 0;
+  // Touch navigation: ON by default (a fresh install must work touch-first);
+  // persist_exists tells an explicit OFF apart from a missing key.
+  s_touch = !persist_exists(PERSIST_KEY_TOUCH) ||
+            (persist_read_int(PERSIST_KEY_TOUCH) != 0);
   // Auto-mark mode: default MARK_NOW for fresh installs (the old
   // both-toggles-ON default); clamp any persisted garbage to the enum range.
   int mm = (int)persist_read_int(PERSIST_KEY_MARK_MODE);

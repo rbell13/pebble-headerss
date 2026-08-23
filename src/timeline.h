@@ -21,6 +21,10 @@ void timeline_page_end(const char *cont);
 //! Re-apply accent/theme to the timeline window (from settings).
 void timeline_apply_settings(void);
 
+//! The TouchEnabled setting changed: (re)attach or tear down the reader's
+//! touch-gesture layer to match. Called from proto.c's settings path.
+void timeline_touch_apply(void);
+
 //! A new highlight-word list arrived (Clay -> watch): re-layout the open
 //! reader's current article (body + header) in place and mark it dirty, so
 //! the words highlight live while reading. No-op when no reader is open.

@@ -39,6 +39,13 @@ reading view with a black top bar, editorial headings and an accent sidebar
   **SELECT toggles read/unread** (and cancels the auto-mark timer),
   long-press SELECT stars; articles are marked read after being shown for
   the configured time (see Auto mark read)
+- **Touch** (Time 2 class watches, on by default) — menus: swipe scrolls,
+  tap selects, a swipe up on the top entry opens the sub-menu; reader:
+  swipe up/down jumps between articles, tap toggles read/unread,
+  press-and-hold stars, double tap enters article scroll — drag to read,
+  double tap again (or a swipe up at the top) gets back; a swipe down at
+  the article bottom moves on. Switch off in the phone settings if
+  firmware touch bugs bite
 - **Unread only** — watch toggle (sub-menu): hides read articles from the
   server for feed/folder streams; "All unread" always shows only unread
 - **Star** — long-press SELECT toggles the star; starred articles show a

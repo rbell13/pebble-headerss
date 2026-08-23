@@ -75,8 +75,8 @@ module.exports = [
         'type': 'toggle',
         'messageKey': 'TouchEnabled',
         'label': 'Touch',
-        'description': 'Off while firmware touch bugs persist (PebbleOS #1865)',
-        'defaultValue': false
+        'description': 'On by default — swipe/tap gestures everywhere. Switch off if firmware touch bugs bite (PebbleOS #1865)',
+        'defaultValue': true
       },
       {
         'type': 'input',
