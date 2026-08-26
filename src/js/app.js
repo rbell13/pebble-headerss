@@ -32,6 +32,7 @@ var Clay = require('@rebble/clay');
 var clayConfig = require('./config');
 var messageKeys = require('message_keys');
 var freshrss = require('./freshrss');
+var miniflux = require('./miniflux');
 
 var CONFIG_KEY = 'headerssConfig';
 var CLAY_SETTINGS_KEY = 'clay-settings';
@@ -121,11 +122,17 @@ function normalizeBaseUrl(url) {
  * @return {{serverUrl: string, user: string, apiPass: string}}
  */
 function loadConfig() {
-  var config = { serverUrl: '', user: '', apiPass: '' };
+  var config = {
+    serverType: 'freshrss',
+    serverUrl: '',
+    user: '',
+    apiPass: ''
+  };
   try {
     var raw = localStorage.getItem(CONFIG_KEY);
     if (raw) {
       var parsed = JSON.parse(raw);
+      config.serverType = parsed.serverType || 'freshrss';
       config.serverUrl = normalizeBaseUrl(parsed.serverUrl || '');
       config.user = parsed.user || '';
       config.apiPass = parsed.apiPass || '';
@@ -156,6 +163,13 @@ function makeClient() {
   var config = loadConfig();
   if (!config.serverUrl || !config.user || !config.apiPass) {
     return null;
+  }
+  if (config.serverType === 'miniflux') {
+    return miniflux.createClient(
+      config.serverUrl,
+      config.user,
+      config.apiPass
+    );
   }
   return freshrss.createClient(config.serverUrl, config.user, config.apiPass);
 }
@@ -713,6 +727,10 @@ function importClaySettings() {
     }
     var cfg = loadConfig();
     var changed = false;
+    if (plain('ServerType')) {
+      cfg.serverType = plain('ServerType');
+      changed = true;
+    }
     if (plain('ServerUrl')) {
       cfg.serverUrl = normalizeBaseUrl(plain('ServerUrl'));
       changed = true;
@@ -744,6 +762,7 @@ function importClaySettings() {
 function handleConfigReply(payload) {
   var cfg = loadConfig();
   var settings = {
+    ServerType: cfg.serverType || 'freshrss',
     ServerUrl: cfg.serverUrl,
     User: cfg.user,
     ApiPass: cfg.apiPass
