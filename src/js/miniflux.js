@@ -37,10 +37,34 @@ function normalizeBaseUrl(url) {
   if (!url) {
     return '';
   }
+
   url = String(url).trim();
+
+  if (!/^https?:\/\//i.test(url)) {
+    var authority = url.split('/')[0];
+    var host = authority;
+
+    /* Strip a port for IPv4/hostname checks. IPv6 literals keep brackets. */
+    if (host.charAt(0) !== '[') {
+      host = host.split(':')[0];
+    }
+
+    var isLocal =
+      host === 'localhost' ||
+      /^127\./.test(host) ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+      /^\[::1\]$/i.test(host) ||
+      /^\[f[cd][0-9a-f]{2}:/i.test(host);
+
+    url = (isLocal ? 'http://' : 'https://') + url;
+  }
+
   while (url.charAt(url.length - 1) === '/') {
     url = url.slice(0, -1);
   }
+
   return url;
 }
 
